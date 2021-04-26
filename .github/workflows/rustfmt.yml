@@ -2,9 +2,9 @@ name: Enforce Rust formatting
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, my-own-change-no-upstream ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, my-own-change-no-upstream ]
 
 jobs:
   rustfmt:
