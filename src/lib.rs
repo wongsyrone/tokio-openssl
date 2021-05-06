@@ -184,6 +184,20 @@ where
     ) -> Result<usize, ssl::Error> {
         future::poll_fn(|cx| self.as_mut().poll_write_early_data(cx, buf)).await
     }
+
+    /// Like [`SslStream::ssl_read`](ssl::SslStream::ssl_read).
+    pub fn poll_ssl_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<Result<usize, ssl::Error>> {
+        self.with_context(cx, |s| cvt_ossl(s.ssl_read(buf)))
+    }
+
+    /// A convenience method wrapping [`poll_ssl_read`](Self::poll_ssl_read).
+    pub async fn ssl_read(mut self: Pin<&mut Self>, buf: &mut [u8]) -> Result<usize, ssl::Error> {
+        future::poll_fn(|cx| self.as_mut().poll_ssl_read(cx, buf)).await
+    }
 }
 
 impl<S> SslStream<S> {
@@ -262,13 +276,15 @@ where
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<io::Result<()>> {
-        match self.as_mut().with_context(ctx, |s| s.shutdown()) {
+        let first_shut_ret = match self.as_mut().with_context(ctx, |s| s.shutdown()) {
             Ok(ShutdownResult::Sent) => {
                 // close notify sent but not received from peer
                 // another try to wait for peer's close notify
-                // The OpenSSL manpage suggests SSL_read(), both of them should be okay
+                // We tried call SSL_shutdown() twice previously, we use the recommended SSL_read() now
+                // The OpenSSL manpage suggests SSL_read()
                 // https://github.com/openssl/openssl/blob/OpenSSL_1_1_1-stable/doc/man3/SSL_shutdown.pod
-                return self.get_pin_mut().poll_shutdown(ctx);
+
+                _ShouldKeepPollSslRead::ShouldStartPollSslRead
             }
             Ok(ShutdownResult::Received) => {
                 // close notify sent and received from peer, finished
@@ -281,11 +297,79 @@ where
             Err(ref e) if e.code() == ErrorCode::WANT_READ || e.code() == ErrorCode::WANT_WRITE => {
                 return Poll::Pending;
             }
+            Err(ref e) if e.code() == ErrorCode::SYSCALL && e.io_error().is_none() => {
+                // other side closed underlying socket without sending the close notify
+                // we assume it is okay
+                return Poll::Ready(Ok(()));
+            }
             Err(e) => {
                 return Poll::Ready(Err(e
                     .into_io_error()
                     .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e))));
             }
+        };
+
+        if let _ShouldKeepPollSslRead::ShouldStartPollSslRead = first_shut_ret {
+            let mut buf = [0u8; 1024];
+            loop {
+                match cvt_shutdown_ssl_read_ossl(self.as_mut().poll_ssl_read(ctx, &mut buf)) {
+                    Poll::Ready(s) => match s {
+                        Ok(keep) => match keep {
+                            _ShouldKeepPollSslRead::ShouldStartPollSslRead => {
+                                return Poll::Ready(Err(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    format!("poll_shutdown: should not go _ShouldKeepPollSslRead::ShouldStartPollSslRead"),
+                                )))
+                            }
+                            _ShouldKeepPollSslRead::KeepPollSslRead => {}
+                            _ShouldKeepPollSslRead::Finished => return Poll::Ready(Ok(())),
+                        },
+                        Err(e) => {
+                            return Poll::Ready(Err(e
+                                .into_io_error()
+                                .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e))));
+                        }
+                    },
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
+        } else {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("poll_shutdown: should already returned"),
+            )));
         }
+    }
+}
+
+/// A private enum that should not be used
+enum _ShouldKeepPollSslRead {
+    ShouldStartPollSslRead,
+    KeepPollSslRead,
+    Finished,
+}
+
+/// Convert SSL_read() result to Poll<T> enum when we are doing SSL_shutdown()
+fn cvt_shutdown_ssl_read_ossl(
+    r: Poll<Result<usize, ssl::Error>>,
+) -> Poll<Result<_ShouldKeepPollSslRead, ssl::Error>> {
+    match r {
+        Poll::Ready(r) => match r {
+            Ok(_) => {
+                // We read some data, we should keep reading until we got ZERO_RETURN
+                Poll::Ready(Ok(_ShouldKeepPollSslRead::KeepPollSslRead))
+            }
+            Err(e) => match e.code() {
+                ErrorCode::WANT_READ | ErrorCode::WANT_WRITE => Poll::Pending,
+                ErrorCode::ZERO_RETURN => Poll::Ready(Ok(_ShouldKeepPollSslRead::Finished)),
+                // other side closed underlying socket without sending the close notify
+                // we assume it is okay
+                ErrorCode::SYSCALL if e.io_error().is_none() => {
+                    Poll::Ready(Ok(_ShouldKeepPollSslRead::Finished))
+                }
+                _ => Poll::Ready(Err(e)),
+            },
+        },
+        Poll::Pending => Poll::Pending,
     }
 }
