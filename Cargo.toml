@@ -18,3 +18,7 @@ tokio = "1.0"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
+
+[patch.crates-io]
+openssl = { git = 'https://github.com/wongsyrone/rust-openssl', rev = 'acb80bf3514ea620cc814b0def26cc4bf893e778' }
+openssl-sys = { git = 'https://github.com/wongsyrone/rust-openssl', rev = 'acb80bf3514ea620cc814b0def26cc4bf893e778' }
