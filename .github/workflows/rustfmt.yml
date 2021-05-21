@@ -11,6 +11,18 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: sfackler/actions/rustup@master
-      - uses: sfackler/actions/rustfmt@master
+      - name: Checkout
+        uses: actions/checkout@v2.3.4
+      - name: Install latest stable Rust toolchain
+        id: install-rust-toolchain
+        uses: actions-rs/toolchain@v1.0.6
+        with:
+          toolchain: stable
+          override: true
+          default: true
+          profile: default
+      - name: cargo fmt
+        uses: actions-rs/cargo@v1.0.1
+        with:
+          command: fmt
+          args: --all -- --check
