@@ -22,7 +22,7 @@ jobs:
           default: true
           profile: default
       - name: cargo fmt
-        uses: actions-rs/cargo@v1.0.1
+        uses: actions-rs/cargo@v1.0.3
         with:
           command: fmt
           args: --all -- --check
