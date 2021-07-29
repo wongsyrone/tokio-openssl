@@ -78,6 +78,14 @@ where
             Poll::Pending => Err(io::Error::from(io::ErrorKind::WouldBlock)),
         }
     }
+
+    fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        let (stream, cx) = unsafe { self.parts() };
+        match stream.poll_write_vectored(cx, bufs) {
+            Poll::Ready(r) => r,
+            Poll::Pending => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+        }
+    }
 }
 
 fn cvt<T>(r: io::Result<T>) -> Poll<io::Result<T>> {
@@ -339,6 +347,14 @@ where
                 format!("poll_shutdown: should already returned"),
             )));
         }
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<Result<usize, io::Error>> {
+        self.with_context(cx, |s| cvt(s.write_vectored(bufs)))
     }
 }
 
