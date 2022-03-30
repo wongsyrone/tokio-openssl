@@ -29,19 +29,19 @@ jobs:
           override: true
           default: true
           profile: default
-      - uses: actions/cache@v2
+      - uses: actions/cache@v3.0.1
         with:
           path: ~/.cargo/registry/index
           key: index-${{ runner.os }}-${{ github.run_number }}
           restore-keys: |
             index-${{ runner.os }}-
       - run: cargo generate-lockfile
-      - uses: actions/cache@v2
+      - uses: actions/cache@v3.0.1
         with:
           path: ~/.cargo/registry/cache
           key: registry-${{ runner.os }}-${{ steps.install-rust-toolchain.outputs.rustc_hash }}-${{ hashFiles('Cargo.lock') }}
       - run: cargo fetch
-      - uses: actions/cache@v2
+      - uses: actions/cache@v3.0.1
         with:
           path: target
           key: target-${{ github.job }}-${{ steps.install-rust-toolchain.outputs.rustc_hash }}-${{ hashFiles('Cargo.lock') }}
